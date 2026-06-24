@@ -1977,6 +1977,288 @@ def test_run_pipeline_v11_preserves_bridge_and_cleans_apex_subsurface_sheet(tmp_
     assert summary["quality_metrics"]["apex_subsurface_cleanup_components"] == 1
 
 
+def test_run_pipeline_v13_reconnects_trunk_before_apex_cleanup_and_keeps_smv_bridge(tmp_path: Path, monkeypatch) -> None:
+    candidates = [
+        SeriesInfo(
+            series_uid="uid.arterial",
+            n_slices=120,
+            protocol_name="Arterial Phase",
+            series_description="1.0 x 1.0_A",
+            convolution_kernel="B_SOFT_B",
+            slice_thickness_mm=1.0,
+            acquisition_time="1",
+        ),
+        SeriesInfo(
+            series_uid="uid.portal",
+            n_slices=120,
+            protocol_name="Portal Phase",
+            series_description="1.0 x 1.0_A",
+            convolution_kernel="B_SOFT_B",
+            slice_thickness_mm=1.0,
+            acquisition_time="2",
+        ),
+        SeriesInfo(
+            series_uid="uid.venous",
+            n_slices=120,
+            protocol_name="Venous Phase",
+            series_description="1.0 x 1.0_A",
+            convolution_kernel="B_SOFT_B",
+            slice_thickness_mm=1.0,
+            acquisition_time="3",
+        ),
+    ]
+    shape_zyx = (20, 32, 32)
+    left_portal = [(6, y, x) for y in (14, 15, 16) for x in (6, 7)]
+    right_portal = [(6, y, x) for y in (14, 15, 16) for x in (24, 25)]
+    sparse_bridge = [(6, 15, x) for x in range(8, 24)]
+    trunk_left = [(15, 22, x) for x in range(8, 12)]
+    trunk_gap = [(15, 22, x) for x in range(12, 17)]
+    trunk_right = [(15, 22, x) for x in range(17, 26)]
+    apex_sheet = [(16, y, x) for y in range(10, 14) for x in range(12, 16)]
+    liver_body = [(z, y, x) for z in range(2, 19) for y in range(4, 28) for x in range(4, 28)]
+    images = {
+        "uid.arterial": _image_with_overrides(-1000, {index: 100 for index in liver_body}, shape_zyx=shape_zyx),
+        "uid.portal": _image_with_overrides(
+            -1000,
+            {
+                **{index: 100 for index in liver_body},
+                **{index: 140 for index in sparse_bridge},
+                **{index: 120 for index in left_portal + right_portal + trunk_left + trunk_right + apex_sheet},
+            },
+            shape_zyx=shape_zyx,
+        ),
+        "uid.venous": _image_with_overrides(
+            -1000,
+            {
+                **{index: 100 for index in liver_body},
+                **{index: 120 for index in sparse_bridge + trunk_left + trunk_right + apex_sheet},
+                **{index: 120 for index in left_portal + right_portal},
+            },
+            shape_zyx=shape_zyx,
+        ),
+    }
+    monkeypatch.setattr(pipeline, "index_dicom_series", lambda _input: candidates)
+    monkeypatch.setattr(pipeline, "_candidate_images_by_uid", lambda _candidates, _max_series: images)
+
+    def fake_phase_candidate(image, reference, *, phase_name, **_kwargs):
+        shape = (reference.GetSize()[2], reference.GetSize()[1], reference.GetSize()[0])
+        mask = np.zeros(shape, dtype=bool)
+        confidence = np.zeros(shape, dtype=np.float32)
+        recovery = np.zeros(shape, dtype=bool)
+        if phase_name == "portal":
+            for index in [*left_portal, *right_portal]:
+                mask[index] = True
+                confidence[index] = 0.9
+        if phase_name == "venous":
+            for index in [*trunk_left, *trunk_right, *apex_sheet]:
+                mask[index] = True
+                confidence[index] = 0.55
+            for index in [*trunk_gap, *apex_sheet]:
+                recovery[index] = True
+        return (
+            mask,
+            confidence,
+            {
+                "candidate_voxels": int(recovery.sum()),
+                "kept_voxels": int(recovery.sum()),
+                "kept_components": int(recovery.any()),
+                "rejected_components": 0,
+            },
+            recovery,
+        )
+
+    monkeypatch.setattr(pipeline, "_phase_candidate", fake_phase_candidate)
+
+    def fake_totalseg(reference, output_dir, roi_subset, device, force=False):
+        label_path = output_dir / "totalseg" / "roi_subset_multilabel.nii.gz"
+        label_path.parent.mkdir(parents=True, exist_ok=True)
+        label_arr = np.zeros((reference.GetSize()[2], reference.GetSize()[1], reference.GetSize()[0]), dtype=np.uint16)
+        label_ids = resolve_totalseg_label_ids(["liver", "portal_vein_and_splenic_vein"])
+        label_arr[2:19, 4:28, 4:28] = label_ids["liver"]
+        label_arr[6, 14:17, 6:8] = label_ids["portal_vein_and_splenic_vein"]
+        label_arr[6, 14:17, 24:26] = label_ids["portal_vein_and_splenic_vein"]
+        label = sitk.GetImageFromArray(label_arr)
+        label.CopyInformation(reference)
+        sitk.WriteImage(label, str(label_path))
+        return label_path
+
+    monkeypatch.setattr(pipeline, "ensure_totalseg_multilabel", fake_totalseg, raising=False)
+
+    bridge_called = False
+    reconnect_called = False
+    captured: dict[str, np.ndarray] = {}
+
+    def fake_bridge(multilabel, confidence, **_kwargs):
+        nonlocal bridge_called
+        bridge_called = True
+        for index in sparse_bridge:
+            multilabel[index] = 2
+            confidence[index] = 1.0
+        return {
+            "smv_portal_bridge_repair_voxels": len(sparse_bridge),
+            "smv_portal_bridge_repair_pairs": 1,
+            "smv_portal_bridge_repair_fallback_voxels": 0,
+            "smv_portal_bridge_repair_max_gap_mm": 5.0,
+            "smv_portal_bridge_repair_evidence_voxels": len(sparse_bridge),
+            "smv_portal_bridge_repair_morph_fill_voxels": 0,
+            "smv_portal_bridge_repair_rejected_pairs": 0,
+            "smv_portal_bridge_repair_rejected_by_reason": {
+                "insufficient_evidence": 0,
+                "excessive_fill": 0,
+                "not_connected": 0,
+            },
+        }
+
+    def fake_reconnect(multilabel, confidence, **kwargs):
+        nonlocal reconnect_called
+        reconnect_called = True
+        assert bridge_called is True
+        trunk_seed_mask = kwargs["trunk_seed_mask"].copy()
+        candidate_mask = kwargs["candidate_mask"].copy()
+        assert trunk_seed_mask[6, 15, 8:24].any()
+        for index in trunk_gap:
+            assert candidate_mask[index]
+            multilabel[index] = 3
+            confidence[index] = 0.86
+        return {
+            "intrahepatic_trunk_reconnect_voxels": len(trunk_gap),
+            "intrahepatic_trunk_reconnect_pairs": 1,
+            "intrahepatic_trunk_reconnect_max_gap_mm": 5.0,
+            "intrahepatic_trunk_reconnect_evidence_voxels": len(trunk_gap),
+            "intrahepatic_trunk_reconnect_morph_fill_voxels": len(trunk_gap),
+            "intrahepatic_trunk_reconnect_rejected_pairs": 0,
+            "intrahepatic_trunk_reconnect_rejected_by_reason": {
+                "insufficient_evidence": 0,
+                "excessive_fill": 0,
+                "not_connected": 0,
+            },
+        }
+
+    def fake_apex_subsurface_cleanup(multilabel, confidence, **kwargs):
+        assert reconnect_called is True
+        protection_mask = kwargs["protection_mask"]
+        captured["protection_mask"] = protection_mask.copy()
+        for index in trunk_gap:
+            assert protection_mask[index]
+            assert multilabel[index] == 3
+        for index in apex_sheet:
+            multilabel[index] = 0
+            confidence[index] = 0.0
+        return {
+            "apex_subsurface_cleanup_voxels": len(apex_sheet),
+            "apex_subsurface_cleanup_components": 1,
+            "apex_subsurface_cleanup_by_label": {"arterial": 0, "portal": 0, "venous": len(apex_sheet)},
+            "apex_subsurface_cleanup_by_region": {"apex": len(apex_sheet), "subsurface": len(apex_sheet)},
+            "apex_subsurface_cleanup_candidate_voxels": len(apex_sheet),
+            "apex_subsurface_cleanup_protected_voxels": len(trunk_gap),
+        }
+
+    monkeypatch.setattr(pipeline, "apply_smv_portal_bridge_repair", fake_bridge)
+    monkeypatch.setattr(pipeline, "apply_intrahepatic_trunk_reconnect", fake_reconnect, raising=False)
+    monkeypatch.setattr(pipeline, "apply_apex_subsurface_cleanup", fake_apex_subsurface_cleanup)
+
+    config_path = tmp_path / "v13.yaml"
+    config_path.write_text(
+        "vessel_extraction:\n"
+        "  body_closing_mm: 0\n"
+        "  body_dilation_mm: 0\n"
+        "  intrahepatic_recovery:\n"
+        "    surface_prune_enabled: false\n"
+        "  include_totalseg_vessel_anchors_in_output: false\n"
+        "  hilar_protection:\n"
+        "    enabled: true\n"
+        "    distance_mm: 1\n"
+        "  smv_portal_bridge_protection:\n"
+        "    enabled: true\n"
+        "    distance_mm: 18\n"
+        "  portal_from_venous_relabel:\n"
+        "    enabled: false\n"
+        "  final_liver_surface_cleanup:\n"
+        "    enabled: false\n"
+        "  deep_liver_cleanup:\n"
+        "    enabled: false\n"
+        "  isolated_liver_blob_cleanup:\n"
+        "    enabled: false\n"
+        "  apex_surface_morph_cleanup:\n"
+        "    enabled: false\n"
+        "  apex_subsurface_cleanup:\n"
+        "    enabled: true\n"
+        "    apex_fraction: 0.20\n"
+        "    subsurface_min_depth_mm: 2\n"
+        "    subsurface_max_depth_mm: 8\n"
+        "    confidence_min: 0.80\n"
+        "    min_component_volume_mm3: 120\n"
+        "    max_component_volume_mm3: 1800\n"
+        "    max_component_linearity: 4.5\n"
+        "    min_surface_fraction: 0.30\n"
+        "    anchor_dilation_mm: 2\n"
+        "    protection_source: protected_trunk\n"
+        "  intrahepatic_trunk_reconnect:\n"
+        "    enabled: true\n"
+        "    target_labels:\n"
+        "      - portal\n"
+        "      - venous\n"
+        "    max_gap_mm: 18\n"
+        "    corridor_radius_mm: 2.5\n"
+        "    tube_radius_mm: 2.5\n"
+        "    closing_radius_mm: 1.2\n"
+        "    min_component_volume_mm3: 300\n"
+        "    min_evidence_fraction: 0.25\n"
+        "    max_fill_to_evidence_ratio: 2.0\n"
+        "    bridge_confidence: 0.86\n"
+        "  outer_peripheral_blob_cleanup:\n"
+        "    enabled: false\n"
+        "  smv_portal_bridge_repair:\n"
+        "    enabled: true\n"
+        "    max_gap_mm: 30\n"
+        "    corridor_radius_mm: 5\n"
+        "    endpoint_min_volume_mm3: 300\n"
+        "    min_portal_minus_venous_hu: 10\n"
+        "    fallback_centerline_enabled: false\n"
+        "    bridge_confidence: 0.85\n"
+        "    morphological_tube_fill_enabled: true\n"
+        "    tube_radius_mm: 3.0\n"
+        "    closing_radius_mm: 1.5\n"
+        "    min_evidence_fraction: 0.35\n"
+        "    max_fill_to_evidence_ratio: 1.75\n"
+        "  post_anchor_peripheral_component_audit:\n"
+        "    enabled: false\n"
+        "  liver_surface_sheet_cleanup:\n"
+        "    enabled: false\n",
+        encoding="utf-8",
+    )
+
+    summary = pipeline.run_pipeline(
+        input_path=tmp_path / "dicom",
+        output_dir=tmp_path / "out",
+        label_path=None,
+        config_path=config_path,
+        skip_frangi=True,
+        skip_mesh=True,
+        vesselness_mode=None,
+        max_series=None,
+    )
+    fused = sitk.GetArrayFromImage(sitk.ReadImage(str(tmp_path / "out" / "compat_nifti" / "vessel_fused_multilabel.nii.gz")))
+
+    assert summary["label"] is None
+    assert summary["guidance_source"] == "auto_totalseg_priors"
+    for index in sparse_bridge:
+        assert fused[index] == 2
+    for index in trunk_gap:
+        assert fused[index] == 3
+        assert captured["protection_mask"][index]
+    for index in apex_sheet:
+        assert fused[index] == 0
+    assert bridge_called is True
+    assert reconnect_called is True
+    assert summary["quality_metrics"]["smv_portal_bridge_repair_voxels"] == len(sparse_bridge)
+    assert summary["quality_metrics"]["smv_portal_bridge_repair_pairs"] == 1
+    assert summary["quality_metrics"]["intrahepatic_trunk_reconnect_voxels"] == len(trunk_gap)
+    assert summary["quality_metrics"]["intrahepatic_trunk_reconnect_pairs"] == 1
+    assert summary["quality_metrics"]["apex_subsurface_cleanup_voxels"] == len(apex_sheet)
+    assert summary["quality_metrics"]["apex_subsurface_cleanup_components"] == 1
+
+
 def test_run_pipeline_v10_does_not_enable_apex_subsurface_cleanup(tmp_path: Path, monkeypatch) -> None:
     candidates = [
         SeriesInfo(
