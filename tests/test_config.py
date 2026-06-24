@@ -323,3 +323,39 @@ def test_ct0021_v11_config_adds_apex_subsurface_cleanup() -> None:
     }
     assert vessel["liver_surface_sheet_cleanup"]["enabled"] is True
     assert vessel["liver_surface_sheet_cleanup"]["bridge_protection_mm"] == 12
+
+
+def test_ct0021_v13_config_connects_trunk_and_expands_apex_subsurface_cleanup() -> None:
+    config = load_config(Path("config/ct0021_v13.yaml"))
+    vessel = config["vessel_extraction"]
+
+    assert vessel["smv_portal_bridge_repair"]["enabled"] is True
+    assert vessel["smv_portal_bridge_repair"]["morphological_tube_fill_enabled"] is True
+    assert vessel["smv_portal_bridge_repair"]["fallback_centerline_enabled"] is False
+
+    assert vessel["intrahepatic_trunk_reconnect"] == {
+        "enabled": True,
+        "target_labels": ["portal", "venous"],
+        "max_gap_mm": 18,
+        "corridor_radius_mm": 2.5,
+        "tube_radius_mm": 2.5,
+        "closing_radius_mm": 1.2,
+        "min_component_volume_mm3": 300,
+        "min_evidence_fraction": 0.25,
+        "max_fill_to_evidence_ratio": 2.0,
+        "bridge_confidence": 0.86,
+    }
+
+    assert vessel["apex_subsurface_cleanup"] == {
+        "enabled": True,
+        "apex_fraction": 0.20,
+        "subsurface_min_depth_mm": 2,
+        "subsurface_max_depth_mm": 8,
+        "confidence_min": 0.80,
+        "min_component_volume_mm3": 120,
+        "max_component_volume_mm3": 1800,
+        "max_component_linearity": 4.5,
+        "min_surface_fraction": 0.30,
+        "anchor_dilation_mm": 2,
+        "protection_source": "protected_trunk",
+    }
