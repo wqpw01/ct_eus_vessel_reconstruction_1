@@ -967,9 +967,15 @@ def run_pipeline(
             if liver_mask is not None:
                 protected_trunk_mask &= liver_mask
 
-    combined_apex_protection_mask = bridge_seed_mask | protected_trunk_mask
-    apex_protection_mask = combined_apex_protection_mask if combined_apex_protection_mask.any() else None
+    apex_protection_mask = bridge_seed_mask if bridge_seed_mask.any() else None
     apex_subsurface_protection_mask = apex_protection_mask
+    apex_subsurface_source_cfg = vessel_cfg.get("apex_subsurface_cleanup", {})
+    if (
+        isinstance(apex_subsurface_source_cfg, dict)
+        and str(apex_subsurface_source_cfg.get("protection_source", "")) == "protected_trunk"
+    ):
+        combined_apex_protection_mask = bridge_seed_mask | protected_trunk_mask
+        apex_subsurface_protection_mask = combined_apex_protection_mask if combined_apex_protection_mask.any() else None
 
     if isinstance(deep_cleanup_cfg, dict) and bool(deep_cleanup_cfg.get("enabled", False)):
         deep_liver_cleanup = apply_deep_liver_cleanup(
