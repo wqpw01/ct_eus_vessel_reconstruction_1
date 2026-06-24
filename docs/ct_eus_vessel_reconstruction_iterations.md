@@ -1187,3 +1187,102 @@ PYTHONPATH=src python -m ct_eus_vessel.cli run \
 - 或直接加载：
   - `mesh/vessel_fused_slicer_ras.ply`
 - 复测前删除旧 volume、segmentation、closed surface 和 model 节点，避免旧缓存误导。
+
+## CT-0021 v14 真实病例结果
+
+### 背景
+
+- v13 用户复核后仍有两个问题：
+  - 肝尖浅表下约 1cm 的片状/破洞网状组织没有明显改善。
+  - 肝内主血管仍表现为“主干支出一节后断裂一段，然后又继续”的局部断链。
+- v14 保留 v12b/v13 已经稳定的 SMV/portal bridge 参数，避免肠系膜上静脉再次消失。
+- v14 的主要变化：
+  - 肝尖浅表下清理范围和力度扩大到更大 apex 区域、更深的 2-18 mm 窗口，并降低最小组件体积门槛。
+  - 肝尖清理保护源改为 `bridge_and_reconnect`，只保护桥接/重连新增通道，避免 v13 的 `protected_trunk` 大范围保护把肝尖残留也罩住。
+  - 新增 `intrahepatic_trunk_gap_fill`，专门处理已经属于同一主干邻域、但局部中间缺一段候选证据的肝内血管断缝。
+  - 修正肝内主干连通性审计阈值：审计仍按主干级别的 `intrahepatic_trunk_reconnect.min_component_volume_mm3` 判断，避免被 gap-fill 的小组件阈值误报为大量断开小块。
+
+### 真实输出目录
+
+- Windows:
+  - `C:\Users\zhangyutang\Desktop\CT-EUS血管重建结果\无标签\CT-0021-v14-apex-strong-gap-fill`
+- WSL:
+  - `/mnt/c/Users/zhangyutang/Desktop/CT-EUS血管重建结果/无标签/CT-0021-v14-apex-strong-gap-fill`
+
+### 运行命令
+
+```bash
+PYTHONPATH=src python -m ct_eus_vessel.cli run \
+  --input '/mnt/c/Users/zhangyutang/Desktop/CT-EUS定位项目/数据/血管重建病例/CT-0021' \
+  --output '/mnt/c/Users/zhangyutang/Desktop/CT-EUS血管重建结果/无标签/CT-0021-v14-apex-strong-gap-fill' \
+  --config config/ct0021_v14.yaml \
+  --vesselness-mode slice-frangi
+```
+
+### 输出检查
+
+- 根目录已生成 Slicer 友好文件：
+  - `reference_ct.nrrd`
+  - `vessel_fused_multilabel.nrrd`
+  - `vessel_confidence.nrrd`
+  - `mesh/vessel_fused_slicer_ras.ply`
+- 根目录没有残留 `.nii.gz`。
+- 兼容 NIfTI 文件位于 `compat_nifti/`。
+- TotalSeg 中间缓存位于 `totalseg/`。
+- `label: null`
+- `guidance_source: auto_totalseg_priors`
+- `warnings: []`
+
+### 核心指标
+
+- `voxel_counts`: arterial `89522`，portal `18963`，venous `349115`，fused `553224`
+- SMV/portal bridge:
+  - `smv_portal_bridge_repair_voxels: 1854`
+  - `smv_portal_bridge_repair_pairs: 1`
+  - `smv_portal_bridge_repair_evidence_voxels: 1113`
+  - `smv_portal_bridge_repair_max_gap_mm: 22.1053389784581`
+- 肝内主干连通性:
+  - `intrahepatic_trunk_connected_before: true`
+  - `intrahepatic_trunk_connected_after: true`
+  - `intrahepatic_trunk_disconnected_components_before: 0`
+  - `intrahepatic_trunk_disconnected_components_after: 0`
+  - `intrahepatic_trunk_min_gap_mm_before: 0.0`
+  - `intrahepatic_trunk_min_gap_mm_after: 0.0`
+  - `intrahepatic_trunk_reconnect_voxels: 0`
+  - `intrahepatic_trunk_reconnect_pairs: 0`
+- 肝内局部断缝填补:
+  - `intrahepatic_trunk_gap_fill_voxels: 3583`
+  - `intrahepatic_trunk_gap_fill_components: 140`
+  - `intrahepatic_trunk_gap_fill_max_gap_mm: 13.505879402160645`
+  - `intrahepatic_trunk_gap_fill_rejected_components: 1970`
+- 肝尖浅表下清理:
+  - `apex_subsurface_cleanup_candidate_voxels: 63651`
+  - `apex_subsurface_cleanup_voxels: 59047`
+  - `apex_subsurface_cleanup_components: 68`
+  - `apex_subsurface_cleanup_protected_voxels: 2255025`
+  - `apex_surface_cleanup_voxels: 8641`
+  - `liver_surface_sheet_cleanup_voxels: 0`
+- 保护与边界:
+  - `protected_trunk_voxels: 138353`
+  - `final_liver_surface_cleanup_voxels: 30318`
+  - `portal_relabel_voxels: 12616`
+  - `portal_relabel_bridge_voxels: 6389`
+  - `outside_body_voxels: 0`
+  - `voxels_removed_by_table_gate: 0`
+
+### v14 自动指标解读
+
+- SMV/portal bridge 与 v12b/v13 保持同量级，`1854` 个桥接修复体素和 `1` 对修复对仍在，说明 v14 没有牺牲肠系膜上静脉重建。
+- 肝内主干审计在修正阈值后显示 before/after 均已连通，且断开大组件数为 `0`。这解决了 v14 首轮跑完后因审计阈值过小导致的误报问题。
+- v14 没有触发大组件级 `intrahepatic_trunk_reconnect`，但新增 `intrahepatic_trunk_gap_fill` 填补了 `3583` 个局部候选断缝体素，目标是处理用户看到的“支出一节后断裂一段再继续”的局部缺口。
+- 肝尖浅表下清理从 v13 的 `25` 个候选且 `0` 删除，扩大到 `63651` 个候选、实际删除 `59047` 个体素，自动指标显示清理力度已经明显加大。
+- 上述指标不能替代 Slicer 视觉复核；仍需重点检查肝尖浅表下约 1cm 的残留是否被清掉，以及肝内血管局部断缝是否在 3D 视图中真正连续。
+
+### Slicer 复核提示
+
+- 只建议加载同一输出目录根部的：
+  - `reference_ct.nrrd`
+  - `vessel_fused_multilabel.nrrd`
+- 或直接加载：
+  - `mesh/vessel_fused_slicer_ras.ply`
+- 复测前删除旧 volume、segmentation、closed surface 和 model 节点，避免旧缓存误导。
