@@ -910,6 +910,10 @@ def run_pipeline(
     trunk_seed_mask = bridge_seed_mask | hilar_protection_mask | smv_portal_protection_mask
     trunk_candidate_mask = portal_mask | venous_mask | intrahepatic_recovery_mask
     pre_trunk_repair_mask = fused.multilabel > 0
+    trunk_connectivity_min_component_volume_mm3 = 0.0
+    trunk_connectivity_cfg = vessel_cfg.get("intrahepatic_trunk_reconnect", {})
+    if isinstance(trunk_connectivity_cfg, dict):
+        trunk_connectivity_min_component_volume_mm3 = float(trunk_connectivity_cfg.get("min_component_volume_mm3", 0.0))
     if (
         not manual_label
         and liver_mask is not None
@@ -926,7 +930,7 @@ def run_pipeline(
             liver_mask=liver_mask,
             spacing_xyz=_spacing_xyz(reference),
             target_labels=trunk_target_labels,
-            min_component_volume_mm3=float(trunk_reconnect_cfg.get("min_component_volume_mm3", 0.0)),
+            min_component_volume_mm3=trunk_connectivity_min_component_volume_mm3,
         )
         intrahepatic_trunk_reconnect = apply_intrahepatic_trunk_reconnect(
             fused.multilabel,
@@ -954,7 +958,7 @@ def run_pipeline(
             liver_mask=liver_mask,
             spacing_xyz=_spacing_xyz(reference),
             target_labels=trunk_target_labels,
-            min_component_volume_mm3=float(trunk_reconnect_cfg.get("min_component_volume_mm3", 0.0)),
+            min_component_volume_mm3=trunk_connectivity_min_component_volume_mm3,
         )
     if (
         not manual_label
@@ -991,7 +995,7 @@ def run_pipeline(
             liver_mask=liver_mask,
             spacing_xyz=_spacing_xyz(reference),
             target_labels=gap_target_labels,
-            min_component_volume_mm3=float(trunk_gap_cfg.get("min_component_volume_mm3", 0.0)),
+            min_component_volume_mm3=trunk_connectivity_min_component_volume_mm3,
         )
     trunk_repair_mask = (fused.multilabel > 0) & ~pre_trunk_repair_mask
 

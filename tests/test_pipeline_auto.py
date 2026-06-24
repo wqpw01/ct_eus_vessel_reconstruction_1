@@ -2468,7 +2468,7 @@ def test_run_pipeline_v14_gap_fill_protects_repair_but_not_apex_sheet(tmp_path: 
         "    distance_mm: 1\n"
         "  smv_portal_bridge_protection:\n"
         "    enabled: true\n"
-        "    distance_mm: 18\n"
+        "    distance_mm: 1\n"
         "  portal_from_venous_relabel:\n"
         "    enabled: false\n"
         "  final_liver_surface_cleanup:\n"
@@ -2565,6 +2565,8 @@ def test_run_pipeline_v14_gap_fill_protects_repair_but_not_apex_sheet(tmp_path: 
     assert gap_fill_called is True
     assert summary["quality_metrics"]["smv_portal_bridge_repair_voxels"] == len(sparse_bridge)
     assert summary["quality_metrics"]["smv_portal_bridge_repair_pairs"] == 1
+    assert summary["quality_metrics"]["intrahepatic_trunk_connected_after"] is True
+    assert summary["quality_metrics"]["intrahepatic_trunk_disconnected_components_after"] == 0
     assert summary["quality_metrics"]["intrahepatic_trunk_reconnect_voxels"] == 0
     assert summary["quality_metrics"]["intrahepatic_trunk_gap_fill_voxels"] == len(trunk_gap)
     assert summary["quality_metrics"]["intrahepatic_trunk_gap_fill_components"] == 1
