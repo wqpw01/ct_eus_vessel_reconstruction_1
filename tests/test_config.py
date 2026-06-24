@@ -359,3 +359,38 @@ def test_ct0021_v13_config_connects_trunk_and_expands_apex_subsurface_cleanup() 
         "anchor_dilation_mm": 2,
         "protection_source": "protected_trunk",
     }
+
+
+def test_ct0021_v14_config_strengthens_apex_and_enables_gap_fill() -> None:
+    config = load_config(Path("config/ct0021_v14.yaml"))
+    vessel = config["vessel_extraction"]
+
+    assert vessel["smv_portal_bridge_repair"]["enabled"] is True
+    assert vessel["smv_portal_bridge_repair"]["morphological_tube_fill_enabled"] is True
+    assert vessel["smv_portal_bridge_repair"]["max_gap_mm"] == 30
+
+    assert vessel["apex_subsurface_cleanup"] == {
+        "enabled": True,
+        "apex_fraction": 0.70,
+        "subsurface_min_depth_mm": 2,
+        "subsurface_max_depth_mm": 18,
+        "confidence_min": 0.86,
+        "min_component_volume_mm3": 16,
+        "max_component_volume_mm3": 6000,
+        "max_component_linearity": 6.0,
+        "min_surface_fraction": 0.20,
+        "anchor_dilation_mm": 0,
+        "protection_source": "bridge_and_reconnect",
+    }
+
+    assert vessel["intrahepatic_trunk_gap_fill"] == {
+        "enabled": True,
+        "target_labels": ["portal", "venous"],
+        "max_gap_mm": 14,
+        "contact_radius_mm": 1.5,
+        "min_component_volume_mm3": 1,
+        "max_component_volume_mm3": 800,
+        "max_component_linearity": 8.0,
+        "min_contact_components": 2,
+        "bridge_confidence": 0.86,
+    }
