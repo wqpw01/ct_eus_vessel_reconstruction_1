@@ -1,0 +1,239 @@
+phase_detection:
+  label_ids:
+    aorta: 8
+    ivc: 9
+    portal_vein: 10
+    liver_vein: 15
+    celiac_artery: 25
+  score_percentile: 50
+  min_roi_voxels: 64
+
+series_selection:
+  min_slices: 100
+  max_slice_thickness_mm: 1.5
+  soft_kernel_keywords:
+    - SOFT
+    - STANDARD
+    - MED
+  excluded_protocol_keywords:
+    - Scout
+    - Dose
+    - MIP
+    - lung
+
+vessel_extraction:
+  hu_candidate_low: 80
+  hu_candidate_high: 350
+  hu_window_min_voxels: 512
+  anchor_hu_window_min_voxels: 64
+  image_hu_window_without_anchor: false
+  hu_hard_high: 700
+  organ_soft_penalty: 0.35
+  min_component_volume_mm3: 8
+  bbox_padding_mm: 8
+  final_anchor_distance_mm: 6
+  auto_anchor_confidence_min: 0.35
+  auto_anchor_min_component_volume_mm3: 8
+  body_min_hu: -600
+  body_closing_mm: 5
+  body_dilation_mm: 2
+  reject_table_like_components: true
+  no_label_requires_vessel_anchor: true
+  include_totalseg_vessel_anchors_in_output: true
+  totalseg_vessel_anchors_include_liver: false
+  final_liver_surface_cleanup:
+    enabled: false
+    surface_depth_mm: 8
+    confidence_min: 0.78
+  portal_from_venous_relabel:
+    enabled: false
+    min_portal_minus_venous_hu: 30
+  intrahepatic_recovery:
+    enabled: true
+    phases:
+      - portal
+      - venous
+    hu_low_margin: 20
+    hu_high_cap: 350
+    local_background_sigma_mm: 6
+    local_contrast_min_hu: 8
+    phase_local_contrast_min_hu:
+      portal: 40
+      venous: 25
+    relaxed_vesselness_min: 0.005
+    closing_mm: 1.5
+    min_component_volume_mm3: 4
+    anchor_dilation_mm: 10
+    component_min_elongation: 2.0
+    max_component_liver_fraction: 0.10
+    surface_prune_enabled: true
+    surface_prune_depth_mm: 5
+    surface_prune_confidence_min: 0.75
+  frangi_sigmas_mm:
+    - 0.6
+    - 1.4
+    - 3.0
+
+totalsegmentator:
+  device: gpu
+  roi_subset:
+    - liver
+    - spleen
+    - kidney_right
+    - kidney_left
+    - stomach
+    - pancreas
+    - duodenum
+    - vertebrae_L1
+    - vertebrae_L2
+    - vertebrae_L3
+    - vertebrae_L4
+    - vertebrae_L5
+    - vertebrae_T1
+    - vertebrae_T2
+    - vertebrae_T3
+    - vertebrae_T4
+    - vertebrae_T5
+    - vertebrae_T6
+    - vertebrae_T7
+    - vertebrae_T8
+    - vertebrae_T9
+    - vertebrae_T10
+    - vertebrae_T11
+    - vertebrae_T12
+    - vertebrae_C1
+    - vertebrae_C2
+    - vertebrae_C3
+    - vertebrae_C4
+    - vertebrae_C5
+    - vertebrae_C6
+    - vertebrae_C7
+    - vertebrae_S1
+    - sacrum
+    - hip_left
+    - hip_right
+    - femur_left
+    - femur_right
+    - humerus_left
+    - humerus_right
+    - rib_left_1
+    - rib_left_2
+    - rib_left_3
+    - rib_left_4
+    - rib_left_5
+    - rib_left_6
+    - rib_left_7
+    - rib_left_8
+    - rib_left_9
+    - rib_left_10
+    - rib_left_11
+    - rib_left_12
+    - rib_right_1
+    - rib_right_2
+    - rib_right_3
+    - rib_right_4
+    - rib_right_5
+    - rib_right_6
+    - rib_right_7
+    - rib_right_8
+    - rib_right_9
+    - rib_right_10
+    - rib_right_11
+    - rib_right_12
+    - sternum
+    - costal_cartilages
+    - scapula_left
+    - scapula_right
+    - clavicula_left
+    - clavicula_right
+    - aorta
+    - inferior_vena_cava
+    - superior_vena_cava
+    - portal_vein_and_splenic_vein
+    - iliac_artery_left
+    - iliac_artery_right
+    - iliac_vena_left
+    - iliac_vena_right
+  soft_penalty_masks:
+    - liver
+    - spleen
+    - kidney_right
+    - kidney_left
+    - stomach
+    - pancreas
+    - duodenum
+  hard_exclusion_masks:
+    - vertebrae_T1
+    - vertebrae_T2
+    - vertebrae_T3
+    - vertebrae_T4
+    - vertebrae_T5
+    - vertebrae_T6
+    - vertebrae_T7
+    - vertebrae_T8
+    - vertebrae_T9
+    - vertebrae_T10
+    - vertebrae_T11
+    - vertebrae_T12
+    - vertebrae_C1
+    - vertebrae_C2
+    - vertebrae_C3
+    - vertebrae_C4
+    - vertebrae_C5
+    - vertebrae_C6
+    - vertebrae_C7
+    - vertebrae_L1
+    - vertebrae_L2
+    - vertebrae_L3
+    - vertebrae_L4
+    - vertebrae_L5
+    - vertebrae_S1
+    - sacrum
+    - hip_left
+    - hip_right
+    - femur_left
+    - femur_right
+    - humerus_left
+    - humerus_right
+    - rib_left_1
+    - rib_left_2
+    - rib_left_3
+    - rib_left_4
+    - rib_left_5
+    - rib_left_6
+    - rib_left_7
+    - rib_left_8
+    - rib_left_9
+    - rib_left_10
+    - rib_left_11
+    - rib_left_12
+    - rib_right_1
+    - rib_right_2
+    - rib_right_3
+    - rib_right_4
+    - rib_right_5
+    - rib_right_6
+    - rib_right_7
+    - rib_right_8
+    - rib_right_9
+    - rib_right_10
+    - rib_right_11
+    - rib_right_12
+    - sternum
+    - costal_cartilages
+    - scapula_left
+    - scapula_right
+    - clavicula_left
+    - clavicula_right
+  vessel_anchor_masks:
+    arterial:
+      - aorta
+      - iliac_artery_left
+      - iliac_artery_right
+    portal:
+      - portal_vein_and_splenic_vein
+    venous:
+      - inferior_vena_cava
+      - superior_vena_cava
+      - iliac_vena_left
+      - iliac_vena_right

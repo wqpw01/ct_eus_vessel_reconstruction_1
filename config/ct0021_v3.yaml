@@ -1,0 +1,8 @@
+vessel_extraction:
+  final_liver_surface_cleanup:
+    enabled: true
+    surface_depth_mm: 8
+    confidence_min: 0.78
+  portal_from_venous_relabel:
+    enabled: true
+    min_portal_minus_venous_hu: 30

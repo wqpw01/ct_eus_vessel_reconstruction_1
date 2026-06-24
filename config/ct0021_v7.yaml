@@ -1,0 +1,37 @@
+vessel_extraction:
+  hilar_protection:
+    enabled: true
+    distance_mm: 12
+  smv_portal_bridge_protection:
+    enabled: true
+    distance_mm: 22
+  final_liver_surface_cleanup:
+    enabled: true
+    surface_depth_mm: 8
+    confidence_min: 0.78
+  portal_from_venous_relabel:
+    enabled: true
+    min_portal_minus_venous_hu: 30
+    protected_min_portal_minus_venous_hu: 20
+  deep_liver_cleanup:
+    enabled: false
+  isolated_liver_blob_cleanup:
+    enabled: true
+    max_component_volume_mm3: 48
+    max_component_elongation: 2.0
+    confidence_min: 0.80
+    anchor_dilation_mm: 4
+  apex_surface_morph_cleanup:
+    enabled: true
+    surface_depth_mm: 10
+    apex_fraction: 0.12
+    confidence_min: 0.82
+    max_component_volume_mm3: 96
+    max_component_elongation: 2.4
+    anchor_dilation_mm: 4
+  outer_peripheral_blob_cleanup:
+    enabled: true
+    max_component_volume_mm3: 160
+    max_component_linearity: 2.2
+    confidence_min: 0.82
+    anchor_dilation_mm: 6

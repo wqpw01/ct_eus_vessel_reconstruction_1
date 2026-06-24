@@ -1,0 +1,80 @@
+vessel_extraction:
+  hilar_protection:
+    enabled: true
+    distance_mm: 12
+  smv_portal_bridge_protection:
+    enabled: true
+    distance_mm: 22
+  final_liver_surface_cleanup:
+    enabled: true
+    surface_depth_mm: 8
+    confidence_min: 0.78
+  portal_from_venous_relabel:
+    enabled: true
+    min_portal_minus_venous_hu: 30
+    protected_min_portal_minus_venous_hu: 20
+  deep_liver_cleanup:
+    enabled: false
+  isolated_liver_blob_cleanup:
+    enabled: true
+    max_component_volume_mm3: 48
+    max_component_elongation: 2.0
+    confidence_min: 0.80
+    anchor_dilation_mm: 4
+  apex_surface_morph_cleanup:
+    enabled: true
+    surface_depth_mm: 10
+    apex_fraction: 0.12
+    confidence_min: 0.82
+    max_component_volume_mm3: 96
+    max_component_elongation: 2.4
+    anchor_dilation_mm: 4
+  outer_peripheral_blob_cleanup:
+    enabled: false
+    max_component_volume_mm3: 160
+    max_component_linearity: 2.2
+    confidence_min: 0.82
+    anchor_dilation_mm: 6
+  smv_portal_bridge_repair:
+    enabled: true
+    max_gap_mm: 30
+    corridor_radius_mm: 5
+    endpoint_min_volume_mm3: 300
+    min_portal_minus_venous_hu: 10
+    fallback_centerline_enabled: false
+    bridge_confidence: 0.85
+    morphological_tube_fill_enabled: true
+    tube_radius_mm: 3.0
+    closing_radius_mm: 1.5
+    min_evidence_fraction: 0.35
+    max_fill_to_evidence_ratio: 1.75
+  post_anchor_peripheral_component_audit:
+    enabled: true
+    organ_envelope_dilation_mm: 18
+    core_anchor_protection_mm: 6
+    min_component_volume_mm3: 96
+    max_component_linearity: 3.0
+    confidence_max: 1.01
+    organ_envelope_masks:
+      - liver
+      - pancreas
+      - spleen
+      - stomach
+      - duodenum
+      - aorta
+      - inferior_vena_cava
+      - portal_vein_and_splenic_vein
+  liver_surface_sheet_cleanup:
+    enabled: true
+    surface_depth_mm: 15
+    min_component_volume_mm3: 200
+    max_component_volume_mm3: 12000
+    max_component_linearity: 4.5
+    min_surface_fraction: 0.55
+    confidence_max: 1.01
+    core_anchor_protection_mm: 8
+    bridge_protection_mm: 5
+    target_labels:
+      - arterial
+      - portal
+      - venous

@@ -1,0 +1,27 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "ct-eus-vessel-reconstruction"
+version = "0.1.0"
+description = "Multi-phase contrast CT vessel extraction and reconstruction for CT-EUS localization research."
+requires-python = ">=3.10"
+dependencies = [
+  "numpy",
+  "scipy",
+  "scikit-image",
+  "SimpleITK",
+  "pydicom",
+  "PyYAML",
+]
+
+[project.scripts]
+ct-eus-vessel = "ct_eus_vessel.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+pythonpath = ["src"]
+testpaths = ["tests"]

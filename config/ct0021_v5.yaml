@@ -1,0 +1,20 @@
+vessel_extraction:
+  hilar_protection:
+    enabled: true
+    distance_mm: 12
+  final_liver_surface_cleanup:
+    enabled: true
+    surface_depth_mm: 8
+    confidence_min: 0.78
+  portal_from_venous_relabel:
+    enabled: true
+    min_portal_minus_venous_hu: 30
+    protected_min_portal_minus_venous_hu: 20
+  deep_liver_cleanup:
+    enabled: false
+  isolated_liver_blob_cleanup:
+    enabled: true
+    max_component_volume_mm3: 32
+    max_component_elongation: 2.0
+    confidence_min: 0.78
+    anchor_dilation_mm: 3

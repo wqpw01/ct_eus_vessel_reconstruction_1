@@ -1,0 +1,41 @@
+# Python caches and local environments
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+.venv/
+venv/
+
+# Packaging/build artifacts
+build/
+dist/
+*.egg-info/
+
+# Local/generated run artifacts
+output/
+outputs/
+results/
+runs/
+artifacts/
+series_index.json
+
+# Medical image/model outputs and derived assets
+*.dcm
+*.nii
+*.nii.gz
+*.nrrd
+*.mha
+*.mhd
+*.ply
+*.stl
+*.vtk
+
+# OS/editor noise
+.DS_Store
+Thumbs.db
+*.swp
+*.tmp
+*.log
