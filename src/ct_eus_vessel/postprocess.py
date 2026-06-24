@@ -20,6 +20,14 @@ LABEL_NAMES = {
 }
 
 
+def _label_ids_from_names(names: tuple[str, ...] | list[str]) -> set[int]:
+    return {
+        PHASE_LABEL_IDS[name]
+        for name in names
+        if isinstance(name, str) and name in PHASE_LABEL_IDS
+    }
+
+
 def _zero_anchor_metrics() -> dict[str, Any]:
     return {
         "totalseg_anchor_output_voxels": 0,
@@ -757,6 +765,85 @@ def _component_rows(mask: np.ndarray, *, spacing_xyz: tuple[float, float, float]
         )
     rows.sort(key=lambda row: int(row["coords"].shape[0]), reverse=True)
     return rows
+
+
+def _zero_trunk_connectivity_metrics() -> dict[str, Any]:
+    return {
+        "intrahepatic_trunk_connected": True,
+        "intrahepatic_trunk_components": 0,
+        "intrahepatic_trunk_disconnected_components": 0,
+        "intrahepatic_trunk_largest_disconnected_volume_mm3": 0.0,
+        "intrahepatic_trunk_min_gap_mm": 0.0,
+    }
+
+
+def measure_intrahepatic_trunk_connectivity(
+    multilabel: np.ndarray,
+    *,
+    trunk_seed_mask: np.ndarray,
+    liver_mask: np.ndarray,
+    spacing_xyz: tuple[float, float, float],
+    target_labels: tuple[str, ...] | list[str],
+    min_component_volume_mm3: float,
+) -> dict[str, Any]:
+    metrics = _zero_trunk_connectivity_metrics()
+    label_ids = _label_ids_from_names(target_labels)
+    if not label_ids:
+        return metrics
+
+    liver = liver_mask.astype(bool, copy=False)
+    target = np.isin(multilabel, list(label_ids)) & liver
+    if not target.any():
+        return metrics
+
+    structure = ndi.generate_binary_structure(multilabel.ndim, 1)
+    labeled, count = ndi.label(target, structure=structure)
+    seed = trunk_seed_mask.astype(bool, copy=False) & target
+    seed_labels = {int(value) for value in np.unique(labeled[seed]) if int(value) != 0}
+    if not seed_labels:
+        return metrics
+
+    voxel_volume = float(spacing_xyz[0] * spacing_xyz[1] * spacing_xyz[2])
+    rows: list[dict[str, Any]] = []
+    trunk_component_coords: list[np.ndarray] = []
+    for bbox, component in _iter_labeled_component_views(labeled, count):
+        component_id = int(labeled[bbox][component][0])
+        starts = np.array([axis.start for axis in bbox], dtype=np.int64)
+        coords = np.argwhere(component) + starts
+        volume_mm3 = float(component.sum()) * voxel_volume
+        if component_id in seed_labels:
+            trunk_component_coords.append(coords)
+        if volume_mm3 >= float(min_component_volume_mm3):
+            rows.append(
+                {
+                    "id": component_id,
+                    "coords": coords,
+                    "volume_mm3": volume_mm3,
+                }
+            )
+
+    metrics["intrahepatic_trunk_components"] = len(rows)
+    disconnected = [row for row in rows if int(row["id"]) not in seed_labels]
+    metrics["intrahepatic_trunk_disconnected_components"] = len(disconnected)
+    metrics["intrahepatic_trunk_connected"] = len(disconnected) == 0
+    if not disconnected or not trunk_component_coords:
+        return metrics
+
+    metrics["intrahepatic_trunk_largest_disconnected_volume_mm3"] = max(
+        float(row["volume_mm3"])
+        for row in disconnected
+    )
+    trunk_coords = np.concatenate(trunk_component_coords, axis=0)
+    min_gap = float("inf")
+    for row in disconnected:
+        gap_mm, _source, _target = _nearest_component_coords(
+            row["coords"],
+            trunk_coords,
+            spacing_xyz=spacing_xyz,
+        )
+        min_gap = min(min_gap, float(gap_mm))
+    metrics["intrahepatic_trunk_min_gap_mm"] = 0.0 if min_gap == float("inf") else float(min_gap)
+    return metrics
 
 
 def _nearest_component_voxels(

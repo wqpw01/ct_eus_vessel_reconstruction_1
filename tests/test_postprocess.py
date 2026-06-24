@@ -981,6 +981,34 @@ def test_apex_subsurface_cleanup_prunes_deeper_sheet_but_preserves_trunk() -> No
     assert metrics["apex_subsurface_cleanup_by_label"]["venous"] == len(sheet)
 
 
+def test_measure_intrahepatic_trunk_connectivity_reports_disconnected_large_branch() -> None:
+    measure = postprocess.measure_intrahepatic_trunk_connectivity
+    multilabel = np.zeros((5, 18, 24), dtype=np.uint8)
+    liver = np.zeros(multilabel.shape, dtype=bool)
+    liver[1:5, 2:16, 2:22] = True
+    trunk_seed = np.zeros(multilabel.shape, dtype=bool)
+
+    trunk = [(2, 8, x) for x in range(3, 9)]
+    branch = [(2, 8, x) for x in range(13, 20)]
+    for index in trunk + branch:
+        multilabel[index] = 3
+    trunk_seed[2, 8, 4] = True
+
+    metrics = measure(
+        multilabel,
+        trunk_seed_mask=trunk_seed,
+        liver_mask=liver,
+        spacing_xyz=(1.0, 1.0, 1.0),
+        target_labels=("portal", "venous"),
+        min_component_volume_mm3=4.0,
+    )
+
+    assert metrics["intrahepatic_trunk_connected"] is False
+    assert metrics["intrahepatic_trunk_disconnected_components"] == 1
+    assert metrics["intrahepatic_trunk_largest_disconnected_volume_mm3"] == 7.0
+    assert metrics["intrahepatic_trunk_min_gap_mm"] == 5.0
+
+
 def test_post_anchor_peripheral_component_audit_removes_large_outer_anchor_blob() -> None:
     assert callable(getattr(postprocess, "apply_post_anchor_peripheral_component_audit", None))
     audit = postprocess.apply_post_anchor_peripheral_component_audit
