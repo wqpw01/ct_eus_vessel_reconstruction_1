@@ -1026,6 +1026,142 @@ def apply_intrahepatic_trunk_reconnect(
     return metrics
 
 
+def _zero_trunk_gap_fill_metrics() -> dict[str, Any]:
+    return {
+        "intrahepatic_trunk_gap_fill_voxels": 0,
+        "intrahepatic_trunk_gap_fill_components": 0,
+        "intrahepatic_trunk_gap_fill_max_gap_mm": 0.0,
+        "intrahepatic_trunk_gap_fill_rejected_components": 0,
+    }
+
+
+def apply_intrahepatic_trunk_gap_fill(
+    multilabel: np.ndarray,
+    confidence: np.ndarray,
+    *,
+    trunk_seed_mask: np.ndarray,
+    candidate_mask: np.ndarray,
+    liver_mask: np.ndarray,
+    body_mask: np.ndarray,
+    hard_exclusion_mask: np.ndarray,
+    spacing_xyz: tuple[float, float, float],
+    enabled: bool,
+    target_labels: tuple[str, ...] | list[str],
+    max_gap_mm: float,
+    contact_radius_mm: float,
+    min_component_volume_mm3: float,
+    max_component_volume_mm3: float,
+    max_component_linearity: float,
+    min_contact_components: int,
+    bridge_confidence: float,
+) -> dict[str, Any]:
+    metrics = _zero_trunk_gap_fill_metrics()
+    if (
+        not enabled
+        or max_gap_mm <= 0
+        or contact_radius_mm <= 0
+        or max_component_volume_mm3 <= 0
+        or max_component_linearity <= 0
+        or min_contact_components < 2
+    ):
+        return metrics
+
+    label_ids = _label_ids_from_names(target_labels)
+    if not label_ids:
+        return metrics
+
+    liver = liver_mask.astype(bool, copy=False)
+    target = np.isin(multilabel, list(label_ids)) & liver
+    if not target.any():
+        return metrics
+
+    structure = ndi.generate_binary_structure(multilabel.ndim, 1)
+    labeled_target, _ = ndi.label(target, structure=structure)
+    seed = trunk_seed_mask.astype(bool, copy=False) & target
+    seed_labels = {int(value) for value in np.unique(labeled_target[seed]) if int(value) != 0}
+    if not seed_labels:
+        return metrics
+
+    allowed = body_mask.astype(bool, copy=False) & ~hard_exclusion_mask.astype(bool, copy=False) & liver
+    if not allowed.any():
+        return metrics
+
+    seed_connected_target = np.isin(labeled_target, list(seed_labels))
+    candidate_source = candidate_mask.astype(bool, copy=False) & allowed & ~target
+    if not candidate_source.any():
+        return metrics
+
+    voxel_volume = float(spacing_xyz[0] * spacing_xyz[1] * spacing_xyz[2])
+    sampling_zyx = np.array(_sampling_zyx(spacing_xyz), dtype=np.float32)
+    contact_padding_voxels = int(np.ceil(float(contact_radius_mm) / max(min(spacing_xyz), 1e-6))) + 2
+    labeled_candidate, count = ndi.label(candidate_source, structure=structure)
+    filled = np.zeros(multilabel.shape, dtype=bool)
+    filled_components = 0
+    rejected_components = 0
+    max_gap_extent = 0.0
+
+    for bbox, component in _iter_labeled_component_views(labeled_candidate, count):
+        starts = np.array([axis.start for axis in bbox], dtype=np.int64)
+        coords = np.argwhere(component) + starts
+        component_volume_mm3 = float(coords.shape[0]) * voxel_volume
+        if component_volume_mm3 < float(min_component_volume_mm3) or component_volume_mm3 > float(max_component_volume_mm3):
+            rejected_components += 1
+            continue
+
+        if coords.size == 0:
+            rejected_components += 1
+            continue
+        extent_mm = float(np.linalg.norm((coords.max(axis=0) - coords.min(axis=0)).astype(np.float32) * sampling_zyx))
+        if extent_mm > float(max_gap_mm):
+            rejected_components += 1
+            continue
+
+        linearity = _component_linearity(component)
+        if np.isfinite(linearity) and linearity > float(max_component_linearity):
+            rejected_components += 1
+            continue
+
+        mins = np.maximum(coords.min(axis=0) - contact_padding_voxels, 0)
+        maxs = np.minimum(coords.max(axis=0) + contact_padding_voxels + 1, np.array(multilabel.shape))
+        contact_bbox = tuple(slice(int(mins[axis]), int(maxs[axis])) for axis in range(multilabel.ndim))
+        local_component = _coords_mask_in_bbox(coords, contact_bbox)
+        contact_region = _dilate_mm(local_component, spacing_xyz=spacing_xyz, distance_mm=float(contact_radius_mm))
+        contact_target = contact_region & seed_connected_target[contact_bbox]
+        labeled_contact, contact_count = ndi.label(contact_target, structure=structure)
+        if contact_count < int(min_contact_components):
+            rejected_components += 1
+            continue
+
+        label_values = multilabel[contact_bbox][contact_target]
+        label_values = label_values[np.isin(label_values, list(label_ids))]
+        if label_values.size == 0:
+            rejected_components += 1
+            continue
+        component_label_id = int(np.bincount(label_values).argmax())
+        fill_local = local_component & (multilabel[contact_bbox] != component_label_id)
+        if not fill_local.any():
+            rejected_components += 1
+            continue
+
+        multilabel_local = multilabel[contact_bbox]
+        confidence_local = confidence[contact_bbox]
+        multilabel_local[fill_local] = component_label_id
+        confidence_local[fill_local] = np.maximum(confidence_local[fill_local], float(bridge_confidence))
+        filled[contact_bbox] |= fill_local
+        filled_components += 1
+        max_gap_extent = max(max_gap_extent, extent_mm)
+
+    if not filled.any():
+        metrics["intrahepatic_trunk_gap_fill_rejected_components"] = int(rejected_components)
+        return metrics
+
+    metrics["intrahepatic_trunk_gap_fill_voxels"] = int(filled.sum())
+    metrics["intrahepatic_trunk_gap_fill_components"] = int(filled_components)
+    metrics["intrahepatic_trunk_gap_fill_max_gap_mm"] = float(max_gap_extent)
+    metrics["intrahepatic_trunk_gap_fill_rejected_components"] = int(rejected_components)
+    return metrics
+
+
 def _nearest_component_voxels(
     source_coords: np.ndarray,
     target_mask: np.ndarray,

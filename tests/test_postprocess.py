@@ -1153,6 +1153,70 @@ def test_intrahepatic_trunk_reconnect_rejects_without_evidence() -> None:
     assert metrics["intrahepatic_trunk_reconnect_rejected_by_reason"]["insufficient_evidence"] == 1
 
 
+def test_intrahepatic_trunk_gap_fill_repairs_internal_candidate_gap_in_connected_component() -> None:
+    fill = postprocess.apply_intrahepatic_trunk_gap_fill
+    multilabel = np.zeros((5, 22, 30), dtype=np.uint8)
+    confidence = np.zeros(multilabel.shape, dtype=np.float32)
+    liver = np.zeros(multilabel.shape, dtype=bool)
+    liver[1:4, 2:20, 2:28] = True
+    body = np.ones(multilabel.shape, dtype=bool)
+    hard = np.zeros(multilabel.shape, dtype=bool)
+    trunk_seed = np.zeros(multilabel.shape, dtype=bool)
+
+    left = [(2, 10, x) for x in range(4, 10)]
+    right = [(2, 10, x) for x in range(15, 22)]
+    detour = (
+        [(2, y, 9) for y in range(11, 15)]
+        + [(2, 14, x) for x in range(10, 16)]
+        + [(2, y, 15) for y in range(11, 14)]
+    )
+    gap = [(2, 10, x) for x in range(10, 15)]
+    for index in [*left, *right, *detour]:
+        multilabel[index] = 3
+        confidence[index] = 0.9
+    trunk_seed[2, 10, 5] = True
+
+    before = postprocess.measure_intrahepatic_trunk_connectivity(
+        multilabel,
+        trunk_seed_mask=trunk_seed,
+        liver_mask=liver,
+        spacing_xyz=(1.0, 1.0, 1.0),
+        target_labels=("venous",),
+        min_component_volume_mm3=4.0,
+    )
+    assert before["intrahepatic_trunk_connected"] is True
+
+    candidate = np.zeros(multilabel.shape, dtype=bool)
+    for index in gap:
+        candidate[index] = True
+
+    metrics = fill(
+        multilabel,
+        confidence,
+        trunk_seed_mask=trunk_seed,
+        candidate_mask=candidate,
+        liver_mask=liver,
+        body_mask=body,
+        hard_exclusion_mask=hard,
+        spacing_xyz=(1.0, 1.0, 1.0),
+        enabled=True,
+        target_labels=("venous",),
+        max_gap_mm=8.0,
+        contact_radius_mm=1.1,
+        min_component_volume_mm3=1.0,
+        max_component_volume_mm3=16.0,
+        max_component_linearity=8.0,
+        min_contact_components=2,
+        bridge_confidence=0.86,
+    )
+
+    for index in gap:
+        assert multilabel[index] == 3
+        assert confidence[index] >= 0.86
+    assert metrics["intrahepatic_trunk_gap_fill_voxels"] == len(gap)
+    assert metrics["intrahepatic_trunk_gap_fill_components"] == 1
+
+
 def test_post_anchor_peripheral_component_audit_removes_large_outer_anchor_blob() -> None:
     assert callable(getattr(postprocess, "apply_post_anchor_peripheral_component_audit", None))
     audit = postprocess.apply_post_anchor_peripheral_component_audit
