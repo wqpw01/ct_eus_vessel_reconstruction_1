@@ -981,6 +981,54 @@ def test_apex_subsurface_cleanup_prunes_deeper_sheet_but_preserves_trunk() -> No
     assert metrics["apex_subsurface_cleanup_by_label"]["venous"] == len(sheet)
 
 
+def test_apex_subsurface_cleanup_expanded_window_removes_one_cm_sheet_but_preserves_protected_trunk() -> None:
+    cleanup = postprocess.apply_apex_subsurface_cleanup
+    multilabel = np.zeros((48, 48, 48), dtype=np.uint8)
+    confidence = np.zeros(multilabel.shape, dtype=np.float32)
+    liver = np.zeros(multilabel.shape, dtype=bool)
+    liver[2:46, 2:46, 2:46] = True
+
+    sheet = [(32, y, x) for y in range(10, 13) for x in range(18, 24)]
+    protected_trunk = [(32, y, 30) for y in range(10, 13)]
+    for index in [*sheet, *protected_trunk]:
+        multilabel[index] = 3
+        confidence[index] = 0.55
+
+    protection_mask = np.zeros(multilabel.shape, dtype=bool)
+    for index in protected_trunk:
+        protection_mask[index] = True
+
+    metrics = cleanup(
+        multilabel,
+        confidence,
+        anchor_mask=np.zeros(multilabel.shape, dtype=bool),
+        liver_mask=liver,
+        spacing_xyz=(1.0, 1.0, 1.0),
+        enabled=True,
+        apex_fraction=0.40,
+        subsurface_min_depth_mm=8.0,
+        subsurface_max_depth_mm=12.0,
+        confidence_min=0.80,
+        min_component_volume_mm3=8.0,
+        max_component_volume_mm3=128.0,
+        max_component_linearity=5.0,
+        min_surface_fraction=0.30,
+        anchor_dilation_mm=0.0,
+        protection_mask=protection_mask,
+    )
+
+    for index in sheet:
+        assert multilabel[index] == 0
+        assert confidence[index] == 0.0
+    for index in protected_trunk:
+        assert multilabel[index] == 3
+        assert confidence[index] == 0.55
+    assert metrics["apex_subsurface_cleanup_voxels"] == len(sheet)
+    assert metrics["apex_subsurface_cleanup_components"] == 1
+    assert metrics["apex_subsurface_cleanup_by_region"]["subsurface"] == len(sheet)
+    assert metrics["apex_subsurface_cleanup_protected_voxels"] >= len(protected_trunk)
+
+
 def test_measure_intrahepatic_trunk_connectivity_reports_disconnected_large_branch() -> None:
     measure = postprocess.measure_intrahepatic_trunk_connectivity
     multilabel = np.zeros((5, 18, 24), dtype=np.uint8)
