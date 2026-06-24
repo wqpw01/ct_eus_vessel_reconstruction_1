@@ -1009,6 +1009,102 @@ def test_measure_intrahepatic_trunk_connectivity_reports_disconnected_large_bran
     assert metrics["intrahepatic_trunk_min_gap_mm"] == 5.0
 
 
+def test_intrahepatic_trunk_reconnect_links_large_branch_with_evidence_corridor() -> None:
+    repair = postprocess.apply_intrahepatic_trunk_reconnect
+    multilabel = np.zeros((5, 20, 28), dtype=np.uint8)
+    confidence = np.zeros(multilabel.shape, dtype=np.float32)
+    liver = np.zeros(multilabel.shape, dtype=bool)
+    liver[1:5, 2:18, 2:26] = True
+    body = np.ones(multilabel.shape, dtype=bool)
+    hard = np.zeros(multilabel.shape, dtype=bool)
+    trunk_seed = np.zeros(multilabel.shape, dtype=bool)
+
+    trunk = [(2, 10, x) for x in range(4, 10)]
+    branch = [(2, 10, x) for x in range(15, 22)]
+    corridor = [(2, 10, x) for x in range(10, 15)]
+    for index in trunk + branch:
+        multilabel[index] = 3
+        confidence[index] = 0.9
+    trunk_seed[2, 10, 5] = True
+
+    candidate = np.zeros(multilabel.shape, dtype=bool)
+    for index in corridor:
+        candidate[index] = True
+
+    metrics = repair(
+        multilabel,
+        confidence,
+        trunk_seed_mask=trunk_seed,
+        candidate_mask=candidate,
+        liver_mask=liver,
+        body_mask=body,
+        hard_exclusion_mask=hard,
+        spacing_xyz=(1.0, 1.0, 1.0),
+        enabled=True,
+        target_labels=("portal", "venous"),
+        max_gap_mm=8.0,
+        corridor_radius_mm=1.1,
+        tube_radius_mm=1.1,
+        closing_radius_mm=1.1,
+        min_component_volume_mm3=4.0,
+        min_evidence_fraction=0.20,
+        max_fill_to_evidence_ratio=2.0,
+        bridge_confidence=0.86,
+    )
+
+    for index in corridor:
+        assert multilabel[index] == 3
+        assert confidence[index] >= 0.86
+    after = postprocess.measure_intrahepatic_trunk_connectivity(
+        multilabel,
+        trunk_seed_mask=trunk_seed,
+        liver_mask=liver,
+        spacing_xyz=(1.0, 1.0, 1.0),
+        target_labels=("portal", "venous"),
+        min_component_volume_mm3=4.0,
+    )
+    assert after["intrahepatic_trunk_connected"] is True
+    assert metrics["intrahepatic_trunk_reconnect_pairs"] == 1
+    assert metrics["intrahepatic_trunk_reconnect_voxels"] == len(corridor)
+
+
+def test_intrahepatic_trunk_reconnect_rejects_without_evidence() -> None:
+    repair = postprocess.apply_intrahepatic_trunk_reconnect
+    multilabel = np.zeros((3, 14, 20), dtype=np.uint8)
+    confidence = np.zeros(multilabel.shape, dtype=np.float32)
+    liver = np.ones(multilabel.shape, dtype=bool)
+    trunk_seed = np.zeros(multilabel.shape, dtype=bool)
+    for index in [(1, 7, x) for x in range(2, 6)]:
+        multilabel[index] = 3
+    for index in [(1, 7, x) for x in range(12, 16)]:
+        multilabel[index] = 3
+    trunk_seed[1, 7, 3] = True
+
+    metrics = repair(
+        multilabel,
+        confidence,
+        trunk_seed_mask=trunk_seed,
+        candidate_mask=np.zeros(multilabel.shape, dtype=bool),
+        liver_mask=liver,
+        body_mask=np.ones(multilabel.shape, dtype=bool),
+        hard_exclusion_mask=np.zeros(multilabel.shape, dtype=bool),
+        spacing_xyz=(1.0, 1.0, 1.0),
+        enabled=True,
+        target_labels=("venous",),
+        max_gap_mm=10.0,
+        corridor_radius_mm=1.1,
+        tube_radius_mm=1.1,
+        closing_radius_mm=1.1,
+        min_component_volume_mm3=2.0,
+        min_evidence_fraction=0.20,
+        max_fill_to_evidence_ratio=2.0,
+        bridge_confidence=0.86,
+    )
+
+    assert metrics["intrahepatic_trunk_reconnect_pairs"] == 0
+    assert metrics["intrahepatic_trunk_reconnect_rejected_by_reason"]["insufficient_evidence"] == 1
+
+
 def test_post_anchor_peripheral_component_audit_removes_large_outer_anchor_blob() -> None:
     assert callable(getattr(postprocess, "apply_post_anchor_peripheral_component_audit", None))
     audit = postprocess.apply_post_anchor_peripheral_component_audit

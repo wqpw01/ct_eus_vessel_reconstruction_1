@@ -846,6 +846,186 @@ def measure_intrahepatic_trunk_connectivity(
     return metrics
 
 
+def _zero_trunk_reconnect_metrics() -> dict[str, Any]:
+    return {
+        "intrahepatic_trunk_reconnect_voxels": 0,
+        "intrahepatic_trunk_reconnect_pairs": 0,
+        "intrahepatic_trunk_reconnect_max_gap_mm": 0.0,
+        "intrahepatic_trunk_reconnect_evidence_voxels": 0,
+        "intrahepatic_trunk_reconnect_morph_fill_voxels": 0,
+        "intrahepatic_trunk_reconnect_rejected_pairs": 0,
+        "intrahepatic_trunk_reconnect_rejected_by_reason": {
+            "insufficient_evidence": 0,
+            "excessive_fill": 0,
+            "not_connected": 0,
+        },
+    }
+
+
+def apply_intrahepatic_trunk_reconnect(
+    multilabel: np.ndarray,
+    confidence: np.ndarray,
+    *,
+    trunk_seed_mask: np.ndarray,
+    candidate_mask: np.ndarray,
+    liver_mask: np.ndarray,
+    body_mask: np.ndarray,
+    hard_exclusion_mask: np.ndarray,
+    spacing_xyz: tuple[float, float, float],
+    enabled: bool,
+    target_labels: tuple[str, ...] | list[str],
+    max_gap_mm: float,
+    corridor_radius_mm: float,
+    tube_radius_mm: float,
+    closing_radius_mm: float,
+    min_component_volume_mm3: float,
+    min_evidence_fraction: float,
+    max_fill_to_evidence_ratio: float,
+    bridge_confidence: float,
+) -> dict[str, Any]:
+    metrics = _zero_trunk_reconnect_metrics()
+    if not enabled or max_gap_mm <= 0 or corridor_radius_mm <= 0:
+        return metrics
+
+    label_ids = _label_ids_from_names(target_labels)
+    if not label_ids:
+        return metrics
+
+    liver = liver_mask.astype(bool, copy=False)
+    target = np.isin(multilabel, list(label_ids)) & liver
+    if not target.any():
+        return metrics
+
+    structure = ndi.generate_binary_structure(multilabel.ndim, 1)
+    labeled, count = ndi.label(target, structure=structure)
+    seed = trunk_seed_mask.astype(bool, copy=False) & target
+    seed_labels = {int(value) for value in np.unique(labeled[seed]) if int(value) != 0}
+    if not seed_labels:
+        return metrics
+
+    allowed = (
+        body_mask.astype(bool, copy=False)
+        & ~hard_exclusion_mask.astype(bool, copy=False)
+        & liver
+    )
+    if not allowed.any():
+        return metrics
+
+    rows: list[dict[str, Any]] = []
+    trunk_component_coords: list[np.ndarray] = []
+    voxel_volume = float(spacing_xyz[0] * spacing_xyz[1] * spacing_xyz[2])
+    for bbox, component in _iter_labeled_component_views(labeled, count):
+        component_id = int(labeled[bbox][component][0])
+        starts = np.array([axis.start for axis in bbox], dtype=np.int64)
+        coords = np.argwhere(component) + starts
+        volume_mm3 = float(component.sum()) * voxel_volume
+        if component_id in seed_labels:
+            trunk_component_coords.append(coords)
+            continue
+        if volume_mm3 < float(min_component_volume_mm3):
+            continue
+        rows.append(
+            {
+                "id": component_id,
+                "coords": coords,
+                "volume_mm3": volume_mm3,
+            }
+        )
+
+    if not rows or not trunk_component_coords:
+        return metrics
+
+    trunk_coords = np.concatenate(trunk_component_coords, axis=0)
+    repaired = np.zeros(multilabel.shape, dtype=bool)
+    evidence_repaired = np.zeros(multilabel.shape, dtype=bool)
+    morph_fill_repaired = np.zeros(multilabel.shape, dtype=bool)
+    repaired_pairs = 0
+    max_repaired_gap = 0.0
+
+    for row in rows:
+        gap_mm, source, target_coord = _nearest_component_coords(
+            row["coords"],
+            trunk_coords,
+            spacing_xyz=spacing_xyz,
+        )
+        if gap_mm > float(max_gap_mm):
+            continue
+
+        tube_radius = float(tube_radius_mm) if tube_radius_mm > 0 else float(corridor_radius_mm)
+        bbox_radius = max(float(corridor_radius_mm), tube_radius, float(closing_radius_mm)) + 2.0
+        mins = np.maximum(np.minimum(source, target_coord) - int(np.ceil(bbox_radius)) - 2, 0)
+        maxs = np.minimum(np.maximum(source, target_coord) + int(np.ceil(bbox_radius)) + 3, np.array(multilabel.shape))
+        bbox = tuple(slice(int(mins[axis]), int(maxs[axis])) for axis in range(multilabel.ndim))
+        starts = np.array([axis.start for axis in bbox], dtype=np.int64)
+        local_shape = tuple(int(axis.stop - axis.start) for axis in bbox)
+        local_source = (source - starts).astype(np.int64)
+        local_target = (target_coord - starts).astype(np.int64)
+        line = _line_mask(local_shape, local_source, local_target)
+        allowed_local = allowed[bbox]
+        target_local = np.isin(multilabel[bbox], list(label_ids))
+        candidate_local = candidate_mask[bbox].astype(bool, copy=False)
+        search_region = _dilate_mm(line, spacing_xyz=spacing_xyz, distance_mm=tube_radius)
+        if search_region.any():
+            search_region &= allowed_local
+        fill_region = search_region & ~target_local
+        candidate = fill_region & candidate_local & allowed_local
+        evidence = candidate.copy()
+        if evidence.size == 0:
+            continue
+
+        evidence_baseline = int((line & ~target_local).sum())
+        if int(evidence.sum()) == 0 or float(evidence.sum()) / max(evidence_baseline, 1) < float(min_evidence_fraction):
+            metrics["intrahepatic_trunk_reconnect_rejected_pairs"] += 1
+            metrics["intrahepatic_trunk_reconnect_rejected_by_reason"]["insufficient_evidence"] += 1
+            continue
+
+        closed = _binary_close_mm(evidence, spacing_xyz=spacing_xyz, radius_mm=float(closing_radius_mm))
+        candidate = (evidence | (closed & fill_region)) & fill_region
+        fill_ratio = int(candidate.sum()) / max(int(evidence.sum()), 1)
+        if fill_ratio > float(max_fill_to_evidence_ratio):
+            metrics["intrahepatic_trunk_reconnect_rejected_pairs"] += 1
+            metrics["intrahepatic_trunk_reconnect_rejected_by_reason"]["excessive_fill"] += 1
+            continue
+
+        linked = candidate | _coords_mask_in_bbox(row["coords"], bbox) | _coords_mask_in_bbox(trunk_coords, bbox)
+        labeled_linked, _ = ndi.label(linked, structure=structure)
+        left_label = int(labeled_linked[tuple(local_source)])
+        right_label = int(labeled_linked[tuple(local_target)])
+        if left_label == 0 or left_label != right_label:
+            metrics["intrahepatic_trunk_reconnect_rejected_pairs"] += 1
+            metrics["intrahepatic_trunk_reconnect_rejected_by_reason"]["not_connected"] += 1
+            continue
+
+        component_coords = np.asarray(row["coords"], dtype=np.int64)
+        component_values = multilabel[tuple(component_coords.T)]
+        component_values = component_values[component_values > 0]
+        if component_values.size == 0:
+            continue
+        component_label_id = int(np.bincount(component_values).argmax())
+        new_candidate = candidate & (multilabel[bbox] != component_label_id)
+        if not new_candidate.any():
+            continue
+
+        repaired[bbox] |= new_candidate
+        evidence_repaired[bbox] |= evidence & new_candidate
+        morph_fill_repaired[bbox] |= new_candidate & (multilabel[bbox] == 0)
+        multilabel[bbox][new_candidate] = component_label_id
+        confidence[bbox][new_candidate] = np.maximum(confidence[bbox][new_candidate], float(bridge_confidence))
+        repaired_pairs += 1
+        max_repaired_gap = max(max_repaired_gap, float(gap_mm))
+
+    if not repaired.any():
+        return metrics
+
+    changed = repaired
+    metrics["intrahepatic_trunk_reconnect_voxels"] = int(changed.sum())
+    metrics["intrahepatic_trunk_reconnect_pairs"] = int(repaired_pairs)
+    metrics["intrahepatic_trunk_reconnect_max_gap_mm"] = float(max_repaired_gap)
+    metrics["intrahepatic_trunk_reconnect_evidence_voxels"] = int((changed & evidence_repaired).sum())
+    metrics["intrahepatic_trunk_reconnect_morph_fill_voxels"] = int((changed & morph_fill_repaired).sum())
+    return metrics
+
+
 def _nearest_component_voxels(
     source_coords: np.ndarray,
     target_mask: np.ndarray,
