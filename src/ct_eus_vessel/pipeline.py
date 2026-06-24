@@ -17,7 +17,7 @@ from ct_eus_vessel.masks import anchor_mask_from_weak_label, anchor_multilabel_f
 from ct_eus_vessel.mesh import save_mask_mesh_ply
 from ct_eus_vessel.phase import PhaseMapping, PhaseScores, choose_phase_series, choose_phase_series_from_metadata
 from ct_eus_vessel.phase_scoring import score_phase_image
-from ct_eus_vessel.postprocess import apply_apex_subsurface_cleanup, apply_apex_surface_morph_cleanup, apply_deep_liver_cleanup, apply_final_liver_surface_cleanup, apply_intrahepatic_trunk_reconnect, apply_isolated_liver_blob_cleanup, apply_liver_surface_recovery_gate, apply_liver_surface_sheet_cleanup, apply_outer_peripheral_blob_cleanup, apply_portal_from_venous_relabel, apply_post_anchor_peripheral_component_audit, apply_smv_portal_bridge_repair, build_hilar_protection_mask, build_smv_portal_protection_mask, inject_totalseg_vessel_anchors, measure_intrahepatic_trunk_connectivity
+from ct_eus_vessel.postprocess import apply_apex_subsurface_cleanup, apply_apex_surface_morph_cleanup, apply_deep_liver_cleanup, apply_final_liver_surface_cleanup, apply_intrahepatic_trunk_gap_fill, apply_intrahepatic_trunk_reconnect, apply_isolated_liver_blob_cleanup, apply_liver_surface_recovery_gate, apply_liver_surface_sheet_cleanup, apply_outer_peripheral_blob_cleanup, apply_portal_from_venous_relabel, apply_post_anchor_peripheral_component_audit, apply_smv_portal_bridge_repair, build_hilar_protection_mask, build_smv_portal_protection_mask, inject_totalseg_vessel_anchors, measure_intrahepatic_trunk_connectivity
 from ct_eus_vessel.qc import save_mip_png, save_overlay_png
 from ct_eus_vessel.serialization import to_jsonable
 from ct_eus_vessel.series import SeriesInfo, filter_candidate_series, sort_series_for_phase_analysis
@@ -732,6 +732,12 @@ def run_pipeline(
             "not_connected": 0,
         },
     }
+    intrahepatic_trunk_gap_fill = {
+        "intrahepatic_trunk_gap_fill_voxels": 0,
+        "intrahepatic_trunk_gap_fill_components": 0,
+        "intrahepatic_trunk_gap_fill_max_gap_mm": 0.0,
+        "intrahepatic_trunk_gap_fill_rejected_components": 0,
+    }
     hilar_protection_mask = np.zeros(fused.multilabel.shape, dtype=bool)
     hilar_protection_voxels = 0
     smv_portal_protection_mask = np.zeros(fused.multilabel.shape, dtype=bool)
@@ -902,6 +908,8 @@ def run_pipeline(
 
     bridge_seed_mask = bridge_repaired_mask | portal_relabel_bridge_mask
     trunk_seed_mask = bridge_seed_mask | hilar_protection_mask | smv_portal_protection_mask
+    trunk_candidate_mask = portal_mask | venous_mask | intrahepatic_recovery_mask
+    pre_trunk_repair_mask = fused.multilabel > 0
     if (
         not manual_label
         and liver_mask is not None
@@ -912,7 +920,6 @@ def run_pipeline(
         trunk_reconnect_cfg = vessel_cfg["intrahepatic_trunk_reconnect"]
         assert isinstance(trunk_reconnect_cfg, dict)
         trunk_target_labels = trunk_reconnect_cfg.get("target_labels", ["portal", "venous"])
-        candidate_mask = portal_mask | venous_mask | intrahepatic_recovery_mask
         intrahepatic_trunk_connectivity_before = measure_intrahepatic_trunk_connectivity(
             fused.multilabel,
             trunk_seed_mask=trunk_seed_mask,
@@ -925,7 +932,7 @@ def run_pipeline(
             fused.multilabel,
             fused.confidence,
             trunk_seed_mask=trunk_seed_mask,
-            candidate_mask=candidate_mask,
+            candidate_mask=trunk_candidate_mask,
             liver_mask=liver_mask,
             body_mask=body_mask,
             hard_exclusion_mask=hard_exclusion if hard_exclusion is not None else np.zeros(body_mask.shape, dtype=bool),
@@ -949,17 +956,64 @@ def run_pipeline(
             target_labels=trunk_target_labels,
             min_component_volume_mm3=float(trunk_reconnect_cfg.get("min_component_volume_mm3", 0.0)),
         )
+    if (
+        not manual_label
+        and liver_mask is not None
+        and trunk_seed_mask.any()
+        and isinstance(vessel_cfg.get("intrahepatic_trunk_gap_fill", {}), dict)
+        and bool(vessel_cfg.get("intrahepatic_trunk_gap_fill", {}).get("enabled", False))
+    ):
+        trunk_gap_cfg = vessel_cfg["intrahepatic_trunk_gap_fill"]
+        assert isinstance(trunk_gap_cfg, dict)
+        gap_target_labels = trunk_gap_cfg.get("target_labels", ["portal", "venous"])
+        intrahepatic_trunk_gap_fill = apply_intrahepatic_trunk_gap_fill(
+            fused.multilabel,
+            fused.confidence,
+            trunk_seed_mask=trunk_seed_mask,
+            candidate_mask=trunk_candidate_mask,
+            liver_mask=liver_mask,
+            body_mask=body_mask,
+            hard_exclusion_mask=hard_exclusion if hard_exclusion is not None else np.zeros(body_mask.shape, dtype=bool),
+            spacing_xyz=_spacing_xyz(reference),
+            enabled=True,
+            target_labels=gap_target_labels,
+            max_gap_mm=float(trunk_gap_cfg.get("max_gap_mm", 0.0)),
+            contact_radius_mm=float(trunk_gap_cfg.get("contact_radius_mm", 0.0)),
+            min_component_volume_mm3=float(trunk_gap_cfg.get("min_component_volume_mm3", 0.0)),
+            max_component_volume_mm3=float(trunk_gap_cfg.get("max_component_volume_mm3", 0.0)),
+            max_component_linearity=float(trunk_gap_cfg.get("max_component_linearity", 0.0)),
+            min_contact_components=int(trunk_gap_cfg.get("min_contact_components", 2)),
+            bridge_confidence=float(trunk_gap_cfg.get("bridge_confidence", 0.86)),
+        )
+        intrahepatic_trunk_connectivity_after = measure_intrahepatic_trunk_connectivity(
+            fused.multilabel,
+            trunk_seed_mask=trunk_seed_mask,
+            liver_mask=liver_mask,
+            spacing_xyz=_spacing_xyz(reference),
+            target_labels=gap_target_labels,
+            min_component_volume_mm3=float(trunk_gap_cfg.get("min_component_volume_mm3", 0.0)),
+        )
+    trunk_repair_mask = (fused.multilabel > 0) & ~pre_trunk_repair_mask
 
     deep_anchor = np.zeros(fused.multilabel.shape, dtype=bool)
     for phase in ("portal", "venous"):
         phase_anchor = vessel_anchor_masks.get(phase)
         if phase_anchor is not None:
             deep_anchor |= phase_anchor.astype(bool, copy=False)
+    apex_subsurface_source_cfg = vessel_cfg.get("apex_subsurface_cleanup", {})
+    apex_subsurface_protection_source = (
+        str(apex_subsurface_source_cfg.get("protection_source", ""))
+        if isinstance(apex_subsurface_source_cfg, dict)
+        else ""
+    )
+    protected_trunk_seed_mask = trunk_seed_mask
+    if apex_subsurface_protection_source == "bridge_and_reconnect":
+        protected_trunk_seed_mask = bridge_seed_mask | trunk_repair_mask
     protected_trunk_mask = np.zeros(fused.multilabel.shape, dtype=bool)
-    if trunk_seed_mask.any():
+    if protected_trunk_seed_mask.any():
         protected_trunk_mask = keep_components_near_anchors(
             fused.multilabel > 0,
-            trunk_seed_mask,
+            protected_trunk_seed_mask,
             dilation_voxels=4,
         )
         if protected_trunk_mask.any():
@@ -969,12 +1023,11 @@ def run_pipeline(
 
     apex_protection_mask = bridge_seed_mask if bridge_seed_mask.any() else None
     apex_subsurface_protection_mask = apex_protection_mask
-    apex_subsurface_source_cfg = vessel_cfg.get("apex_subsurface_cleanup", {})
-    if (
-        isinstance(apex_subsurface_source_cfg, dict)
-        and str(apex_subsurface_source_cfg.get("protection_source", "")) == "protected_trunk"
-    ):
+    if apex_subsurface_protection_source == "protected_trunk":
         combined_apex_protection_mask = bridge_seed_mask | protected_trunk_mask
+        apex_subsurface_protection_mask = combined_apex_protection_mask if combined_apex_protection_mask.any() else None
+    elif apex_subsurface_protection_source == "bridge_and_reconnect":
+        combined_apex_protection_mask = bridge_seed_mask | trunk_repair_mask
         apex_subsurface_protection_mask = combined_apex_protection_mask if combined_apex_protection_mask.any() else None
 
     if isinstance(deep_cleanup_cfg, dict) and bool(deep_cleanup_cfg.get("enabled", False)):
@@ -1213,6 +1266,12 @@ def run_pipeline(
         "intrahepatic_trunk_reconnect_rejected_by_reason": intrahepatic_trunk_reconnect[
             "intrahepatic_trunk_reconnect_rejected_by_reason"
         ],
+        "intrahepatic_trunk_gap_fill_voxels": int(intrahepatic_trunk_gap_fill["intrahepatic_trunk_gap_fill_voxels"]),
+        "intrahepatic_trunk_gap_fill_components": int(intrahepatic_trunk_gap_fill["intrahepatic_trunk_gap_fill_components"]),
+        "intrahepatic_trunk_gap_fill_max_gap_mm": float(intrahepatic_trunk_gap_fill["intrahepatic_trunk_gap_fill_max_gap_mm"]),
+        "intrahepatic_trunk_gap_fill_rejected_components": int(
+            intrahepatic_trunk_gap_fill["intrahepatic_trunk_gap_fill_rejected_components"]
+        ),
         "totalseg_anchor_output_voxels": int(anchor_output["totalseg_anchor_output_voxels"]),
         "totalseg_anchor_output_by_phase": anchor_output["totalseg_anchor_output_by_phase"],
         "outside_body_voxels": int(((fused.multilabel > 0) & ~body_mask).sum()),
